@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUpRight, BookOpen, CalendarDays, Check, Circle, Clock3, Plus, Trash2 } from 'lucide-react'
 import { loadAcademicWorkspace, saveAcademicWorkspace } from './api/academics.js'
 
 const storageKey = 'cgc-smart-campus-academics-v1'
+const pendingKey = `${storageKey}-pending`
 
 const initialData = {
   subjects: [
@@ -28,12 +29,38 @@ function readData() {
   return initialData
 }
 
+function hasSavedData() {
+  try {
+    return localStorage.getItem(storageKey) !== null
+  } catch {
+    return false
+  }
+}
+
+function hasPendingChanges() {
+  try {
+    return localStorage.getItem(pendingKey) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function markPendingChanges(pending) {
+  try {
+    if (pending) localStorage.setItem(pendingKey, 'true')
+    else localStorage.removeItem(pendingKey)
+  } catch {
+    // The current session can still sync even if browser storage is disabled.
+  }
+}
+
 function saveData(data) {
   try {
     localStorage.setItem(storageKey, JSON.stringify(data))
   } catch {
     // The planner still works for this session when storage is disabled.
   }
+  window.dispatchEvent(new CustomEvent('cgc:academics-updated', { detail: data }))
 }
 
 function percentage(subject) {
@@ -53,6 +80,9 @@ function dueLabel(date) {
 
 export default function AcademicsPage() {
   const [data, setData] = useState(readData)
+  const dataRef = useRef(data)
+  const mutationRef = useRef(0)
+  const saveQueueRef = useRef(Promise.resolve())
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [subject, setSubject] = useState(data.subjects[0]?.name || '')
@@ -62,12 +92,22 @@ export default function AcademicsPage() {
 
   useEffect(() => {
     let active = true
+    const localExists = hasSavedData()
+    const localPending = hasPendingChanges()
     loadAcademicWorkspace()
       .then((result) => {
         if (!active) return
         if (result.data?.subjects && result.data?.assignments) {
-          setData(result.data)
-          saveData(result.data)
+          const localWins = localPending || mutationRef.current > 0 || (localExists && result.storage !== 'mongodb')
+          if (localWins) {
+            const localData = dataRef.current
+            setData(localData)
+            queueRemoteSave(localData, mutationRef.current, () => active)
+          } else {
+            dataRef.current = result.data
+            setData(result.data)
+            saveData(result.data)
+          }
         }
         setStorageStatus(result.storage || 'api')
       })
@@ -77,6 +117,20 @@ export default function AcademicsPage() {
     return () => { active = false }
   }, [])
 
+  function queueRemoteSave(next, version, isActive = () => true) {
+    saveQueueRef.current = saveQueueRef.current
+      .catch(() => undefined)
+      .then(() => saveAcademicWorkspace(next))
+      .then((result) => {
+        if (!isActive()) return
+        setStorageStatus(result.storage || 'api')
+        if (version === mutationRef.current) markPendingChanges(false)
+      })
+      .catch(() => {
+        if (isActive()) setStorageStatus('local')
+      })
+  }
+
   const average = useMemo(() => {
     const total = data.subjects.reduce((sum, item) => sum + item.total, 0)
     const attended = data.subjects.reduce((sum, item) => sum + item.attended, 0)
@@ -84,11 +138,12 @@ export default function AcademicsPage() {
   }, [data.subjects])
 
   function updateData(next) {
+    dataRef.current = next
+    const version = ++mutationRef.current
     setData(next)
     saveData(next)
-    saveAcademicWorkspace(next)
-      .then((result) => setStorageStatus(result.storage || 'api'))
-      .catch(() => setStorageStatus('local'))
+    markPendingChanges(true)
+    queueRemoteSave(next, version)
   }
 
   function recordAttendance(id, present) {
@@ -154,7 +209,7 @@ export default function AcademicsPage() {
               </div>
             })}
           </div>
-          <div className="attendance-note"><span className="note-dot" /> Attendance changes are saved in this browser. Mark a class once it has ended.</div>
+          <div className="attendance-note"><span className="note-dot" /> Use the check or absence control once a class has ended.</div>
         </article>
 
         <article className="panel assignment-panel">
@@ -175,7 +230,8 @@ export default function AcademicsPage() {
           </div>
         </article>
       </section>
-      <p className="local-data-note">This is your personal planner on this device. Sign-in and cloud sync will be added in a later milestone.</p>
+      <p className="local-data-note">{storageStatus === 'mongodb' ? 'Changes sync to MongoDB for this browser workspace. Sign-in is not enabled yet.' : storageStatus === 'memory' ? 'The API is connected, but its temporary storage can reset. A copy is saved in this browser.' : storageStatus === 'connecting' ? 'Loading your saved planner…' : 'The API is unavailable. Changes stay in this browser and will sync when it reconnects.'}</p>
     </div>
   )
 }
+
