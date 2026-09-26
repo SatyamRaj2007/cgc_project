@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowDown, ArrowUpRight, BookOpen, CalendarDays, Check, Circle, Clock3, Plus, Trash2 } from 'lucide-react'
+import { loadAcademicWorkspace, saveAcademicWorkspace } from './api/academics.js'
 
 const storageKey = 'cgc-smart-campus-academics-v1'
 
@@ -57,6 +58,24 @@ export default function AcademicsPage() {
   const [subject, setSubject] = useState(data.subjects[0]?.name || '')
   const [due, setDue] = useState('')
   const [filter, setFilter] = useState('all')
+  const [storageStatus, setStorageStatus] = useState('connecting')
+
+  useEffect(() => {
+    let active = true
+    loadAcademicWorkspace()
+      .then((result) => {
+        if (!active) return
+        if (result.data?.subjects && result.data?.assignments) {
+          setData(result.data)
+          saveData(result.data)
+        }
+        setStorageStatus(result.storage || 'api')
+      })
+      .catch(() => {
+        if (active) setStorageStatus('local')
+      })
+    return () => { active = false }
+  }, [])
 
   const average = useMemo(() => {
     const total = data.subjects.reduce((sum, item) => sum + item.total, 0)
@@ -67,6 +86,9 @@ export default function AcademicsPage() {
   function updateData(next) {
     setData(next)
     saveData(next)
+    saveAcademicWorkspace(next)
+      .then((result) => setStorageStatus(result.storage || 'api'))
+      .catch(() => setStorageStatus('local'))
   }
 
   function recordAttendance(id, present) {
@@ -105,11 +127,11 @@ export default function AcademicsPage() {
     <div className="academic-page">
       <section className="module-heading">
         <div>
-          <div className="eyebrow"><span className="live-dot" /> YOUR LEARNING, IN ONE PLACE</div>
+          <div className="eyebrow"><span className={`live-dot ${storageStatus === 'local' ? 'offline-dot' : ''}`} /> YOUR LEARNING, IN ONE PLACE</div>
           <h1>My academics</h1>
           <p className="welcome-subtitle">Keep an eye on attendance and stay ahead of your coursework.</p>
         </div>
-        <button className="primary-button" onClick={() => setFormOpen((value) => !value)}><Plus size={16} /> Add assignment</button>
+        <div className="module-actions"><span className={`storage-status ${storageStatus}`} title={storageStatus === 'memory' ? 'Data is on the API and may reset when it restarts.' : undefined}>{storageStatus === 'connecting' ? 'Connecting…' : storageStatus === 'mongodb' ? 'Cloud sync on' : storageStatus === 'memory' ? 'API connected · temporary storage' : 'Saved on this device'}</span><button className="primary-button" onClick={() => setFormOpen((value) => !value)}><Plus size={16} /> Add assignment</button></div>
       </section>
 
       <section className="academic-summary">
