@@ -3,9 +3,23 @@ import { env } from './config/env.js'
 import mongoose from 'mongoose'
 
 if (env.mongoUri) {
-  mongoose.connect(env.mongoUri)
-    .then(() => console.log('MongoDB connected'))
-    .catch((error) => console.error('MongoDB unavailable; using in-memory academic data:', error.message))
+  let retryDelay = 5_000
+  const maxRetryDelay = 60_000
+
+  async function connectToMongo() {
+    try {
+      await mongoose.connect(env.mongoUri)
+      retryDelay = 5_000
+      console.log('MongoDB connected')
+    } catch (error) {
+      console.error('MongoDB unavailable; using in-memory academic data:', error.message)
+      const nextRetryDelay = retryDelay
+      retryDelay = Math.min(retryDelay * 2, maxRetryDelay)
+      setTimeout(connectToMongo, nextRetryDelay)
+    }
+  }
+
+  connectToMongo()
 } else {
   console.warn('MONGODB_URI is not configured; academic data will be held in memory until the API restarts')
 }
