@@ -2,7 +2,7 @@ import app from './app.js'
 import { env } from './config/env.js'
 import mongoose from 'mongoose'
 
-if (env.mongoUri) {
+if (env.databaseEnabled && env.mongoUri) {
   let retryDelay = 5_000
   const maxRetryDelay = 60_000
 
@@ -20,6 +20,8 @@ if (env.mongoUri) {
   }
 
   connectToMongo()
+} else if (!env.databaseEnabled) {
+  console.log('Database connection disabled; academic data will be held in memory until the API restarts')
 } else {
   console.warn('MONGODB_URI is not configured; academic data will be held in memory until the API restarts')
 }
@@ -35,3 +37,4 @@ function shutdown(signal) {
 
 process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('SIGTERM', () => shutdown('SIGTERM'))
+

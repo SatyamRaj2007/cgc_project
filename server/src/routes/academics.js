@@ -5,6 +5,7 @@ import { AcademicWorkspace } from '../models/AcademicWorkspace.js'
 const router = Router()
 const memoryWorkspaces = new Map()
 const sessionPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const colorOptions = new Set(['blue', 'violet', 'green', 'amber'])
 
 const sampleWorkspace = {
   subjects: [
@@ -18,6 +19,48 @@ const sampleWorkspace = {
     { id: 'a2', title: 'Normalize the library database schema', subject: 'Database Management Systems', due: '2026-10-01', done: false },
     { id: 'a3', title: 'Process scheduling worksheet', subject: 'Operating Systems', due: '2026-10-03', done: true },
   ],
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isValidDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+function normalizeWorkspace(body) {
+  if (!isRecord(body) || !Array.isArray(body.subjects) || !Array.isArray(body.assignments)
+    || body.subjects.length > 100 || body.assignments.length > 500) return null
+
+  const subjectIds = new Set()
+  const subjects = []
+  for (const item of body.subjects) {
+    if (!isRecord(item) || typeof item.id !== 'string' || !item.id.trim() || item.id.length > 100
+      || subjectIds.has(item.id) || typeof item.name !== 'string' || !item.name.trim() || item.name.length > 100
+      || typeof item.code !== 'string' || item.code.length > 32
+      || typeof item.room !== 'string' || item.room.length > 100
+      || !colorOptions.has(item.color)
+      || !Number.isInteger(item.attended) || !Number.isInteger(item.total)
+      || item.attended < 0 || item.total < item.attended || item.total > 10000) return null
+    subjectIds.add(item.id)
+    subjects.push({ id: item.id, code: item.code, name: item.name, attended: item.attended, total: item.total, room: item.room, color: item.color })
+  }
+
+  const assignmentIds = new Set()
+  const assignments = []
+  for (const item of body.assignments) {
+    if (!isRecord(item) || typeof item.id !== 'string' || !item.id.trim() || item.id.length > 100
+      || assignmentIds.has(item.id) || typeof item.title !== 'string' || !item.title.trim() || item.title.length > 100
+      || typeof item.subject !== 'string' || item.subject.length > 100
+      || !isValidDate(item.due) || typeof item.done !== 'boolean') return null
+    assignmentIds.add(item.id)
+    assignments.push({ id: item.id, title: item.title.trim(), subject: item.subject, due: item.due, done: item.done })
+  }
+
+  return { subjects, assignments }
 }
 
 function getSessionId(req, res) {
@@ -52,21 +95,11 @@ router.put('/', async (req, res, next) => {
   const sessionId = getSessionId(req, res)
   if (!sessionId) return
 
-  const { subjects, assignments } = req.body || {}
-  const validSubjects = Array.isArray(subjects) && subjects.length <= 100 && subjects.every((subject) =>
-    typeof subject.id === 'string' && typeof subject.name === 'string'
-    && Number.isInteger(subject.attended) && Number.isInteger(subject.total)
-    && subject.attended >= 0 && subject.total >= subject.attended && subject.total <= 10000)
-  const validAssignments = Array.isArray(assignments) && assignments.length <= 500 && assignments.every((item) =>
-    typeof item.id === 'string' && typeof item.title === 'string' && item.title.trim().length > 0
-    && item.title.length <= 100 && typeof item.subject === 'string'
-    && /^\d{4}-\d{2}-\d{2}$/.test(item.due) && typeof item.done === 'boolean')
-
-  if (!validSubjects || !validAssignments) {
+  const data = normalizeWorkspace(req.body)
+  if (!data) {
     return res.status(400).json({ success: false, error: { message: 'Academic workspace data is invalid.' } })
   }
 
-  const data = { subjects, assignments }
   try {
     if (storageMode() === 'mongodb') {
       await AcademicWorkspace.findOneAndUpdate(
@@ -84,3 +117,4 @@ router.put('/', async (req, res, next) => {
 })
 
 export default router
+
